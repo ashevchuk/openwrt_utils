@@ -1,0 +1,61 @@
+#!/bin/sh
+
+. /lib/functions/network.sh
+
+setup_interface () {
+	logger -p daemon.info -t netifd "$INTERFACE Setting DNS balancing options"
+
+	local ipsetname dnssrv dnssrvs router routers
+
+        ipsetname="dns_${INTERFACE}"
+
+        network_get_dnsserver dnssrvs "$INTERFACE"
+        network_get_gateway routers "$INTERFACE"
+
+	if ! ipset -q list dns_google > /dev/null; then
+		logger -p daemon.info -t netifd "$INTERFACE Creating \"dns_google\" ipset"
+
+		ipset -! -q -exist create dns_google hash:net family inet
+		ipset -! -q -exist add dns_google 8.8.8.8
+		ipset -! -q -exist add dns_google 8.8.4.4
+	fi
+
+	if ! ipset -q list "$ipsetname" > /dev/null; then
+		logger -p daemon.info -t netifd "$INTERFACE Creating \"$ipsetname\" ipset"
+		ipset -! -q -exist create "$ipsetname" hash:net family inet
+	fi
+
+	for dnssrv in $dnssrvs ; do
+		logger -p daemon.info -t netifd "$INTERFACE Adding $dnssrv to \"$ipsetname\" ipset"
+		ipset -! -q -exist add "$ipsetname" "$dnssrv"
+
+		for router in $routers; do
+			logger -p daemon.info -t netifd "$INTERFACE Adding $dnssrv to routes table via $router by $interface"
+			route add -host "$dnssrv" gw "$router" dev "$interface" 2>&1 > /dev/null
+		done
+	done
+}
+
+deconfig_interface() {
+	logger -p daemon.info -t netifd "$INTERFACE Interface is disconfigured"
+
+	local ipsetname
+
+	ipsetname="dns_${INTERFACE}"
+
+	if ipset -q list "$ipsetname" > /dev/null; then
+		logger -p daemon.info -t netifd "$INTERFACE Flushing \"$ipsetname\" ipset"
+		ipset -! -q flush "$ipsetname"
+	fi
+}
+
+case "$1" in
+        deconfig)
+                deconfig_interface
+        ;;
+        renew|bound)
+                setup_interface
+        ;;
+esac
+
+exit 0
